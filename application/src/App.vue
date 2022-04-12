@@ -83,7 +83,7 @@ export default {
           // 如果已上传则跳过
           if (uploaded.includes(i)) continue
 
-          startIndex = i * this.chunkSize // 片段起点
+          startIndex = i * this.chunkSize //  片段起点
           endIndex = (i + 1) * this.chunkSize // 片段尾点
           endIndex > file.size && (endIndex = file.size)
 
