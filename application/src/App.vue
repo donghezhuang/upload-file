@@ -1,6 +1,8 @@
 <template>
   <div>
-    <input type="file" @change="uploadFile">
+     <input type="file" @change="uploadFile">{{ precent }}%
+    <button type="button" v-if="!isStop" @click="stopUpload">暂停</button>
+    <button type="button" v-else @click="reupload">继续上传</button>
   </div>
 </template>
 
@@ -11,8 +13,12 @@ import SparkMD5 from 'spark-md5'
 export default {
   data() {
     return {
+      remainChunks: [], // 剩余切片
+      isStop: false, // 暂停上传控制
+      precent: 0, // 上传百分比
+      uploadedChunkSize: 0, // 已完成上传的切片数
       fileInfo: null,
-      chunkSize: 400 * 1024 // 切片大小
+      chunkSize: 1 * 1024 * 1024 // 切片大小
     }
   },
   methods: {
@@ -34,6 +40,7 @@ export default {
         console.log(uploaded)
         // 切割文件
         const chunkArr = await this.cutBlob(fileMd5, file, uploaded)
+        this.remainChunks = chunkArr
         // 开始上传
         this.sendRequest(chunkArr, 4, this.chunkMerge)
       })
@@ -49,6 +56,7 @@ export default {
     //     }
     //   })
     // },
+   
     createFileMd5(file) {
       return new Promise((resolve) => {
         const spark = new SparkMD5.ArrayBuffer()
@@ -60,7 +68,7 @@ export default {
           // 生成文件hash
           spark.append(content)
           const hash = spark.end()
-          console.log(hash) // 63ac7cfb8e5b978c15ea53e779d056b1
+          console.log(hash) // 
 
           // 文件切割
 
@@ -92,7 +100,9 @@ export default {
 
           chunkArr.push({
             index: i,
-            chunk: contentItem
+            chunk: contentItem,
+            size: file.size,
+            name: file.name
           })
         }
         this.fileInfo = {
@@ -109,6 +119,10 @@ export default {
       let fetchArr = []
 
       let toFetch = () => {
+        if (this.isStop) {
+          return Promise.reject('暂停上传')
+        }
+
         if (!arr.length) {
           return Promise.resolve()
         }
@@ -119,12 +133,13 @@ export default {
           // 成功从任务队列中移除
           fetchArr.splice(fetchArr.indexOf(it), 1)
         }, err => {
+          this.isStop = true
           // 如果失败则重新放入总队列中
           arr.unshift(chunkItem)
           console.log(err)
         })
         fetchArr.push(it)
-        console.log(fetchArr)
+        console.log(it)
 
         let p = Promise.resolve()
         if (fetchArr.length >= max) {
@@ -163,7 +178,16 @@ export default {
         url: "/upload/snippet",
         method: "post",
         data: formdata,
-        headers: { "Content-Type": "multipart/form-data" }
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (e) => {
+          const { loaded } = e
+          console.log(e, item.size)
+          this.uploadedChunkSize += loaded
+          this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
+
+          console.log(this.uploadedChunkSize, item)
+          this.precent = ((this.uploadedChunkSize / item.size) * 100).toFixed(2)
+        }
       })
     },
     // 文件上传方法
@@ -189,6 +213,14 @@ export default {
       }).then(res => {
         console.log(res.data)
       })
+    },
+    stopUpload() {
+      this.isStop = true
+    },
+    reupload() {
+      this.isStop = false
+      // 开始上传
+      this.sendRequest(this.remainChunks, 4, this.chunkMerge)
     }
   }
 }
