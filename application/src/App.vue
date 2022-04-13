@@ -18,7 +18,7 @@ export default {
       precent: 0, // 上传百分比
       uploadedChunkSize: 0, // 已完成上传的切片数
       fileInfo: null,
-      chunkSize: 1 * 1024 * 1024 // 切片大小
+      chunkSize: 100 * 1024 // 切片大小
     }
   },
   methods: {

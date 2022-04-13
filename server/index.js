@@ -8,6 +8,10 @@ const static = require('koa-static') // 访问服务器静态资源组件
 
 const uploadPath = path.join(__dirname, 'public/uploads') // 定义文件上传目录
 
+// // 如果初始没有public目录，则自动创建
+if (!fs.existsSync(path.join(__dirname, 'public'))) {
+  fs.mkdirSync(path.join(__dirname, 'public'))
+}
 // 如果初始没有改文件目录，则自动创建
 if (!fs.existsSync(uploadPath)) {
   fs.mkdirSync(uploadPath)
@@ -54,7 +58,6 @@ function uploadFn(ctx, destPath) {
   return new Promise((resolve, reject) => {
     const { name, path: _path } = ctx.request.files.file // 拿到上传的文件信息
     const filePath = destPath || path.join(uploadPath, name) // 重新组合文件名
-
     // 将临时文件重新设置文件名及地址
     fs.rename(_path, filePath, (err) => {
       if (err) {
@@ -74,7 +77,6 @@ router.post('/api/upload/checkSnippet', function snippet(ctx) {
 
   let chunksFiles = []
 
-  console.log(fs.existsSync(chunksPath))
   if(fs.existsSync(chunksPath)) {
     // 切片文件
     chunksFiles = fs.readdirSync(chunksPath)
@@ -100,7 +102,6 @@ router.post('/api/upload/snippet', async function snippet(ctx) {
 
   // 切片文件
   const chunksFileName = chunksPath + hash + '-' + index
-  
   await uploadFn(ctx, chunksFileName).then(name => {
     ctx.body = {
       code: 0,
@@ -164,37 +165,63 @@ function mergeFile(dirPath, filePath, hash, total) {
         return reject('上传失败，切片数量不符')
       }
 
+      const sortFiles = files.sort((a, b) => a.split("-")[1] - b.split("-")[1])
+      const chunkPathArr = sortFiles.map(chunkName => {
+        return dirPath + chunkName
+      })
+
       // 创建文件写入流
       const fileWriteStream = fs.createWriteStream(filePath)
-      function merge(i) {
-        return new Promise((res, rej) => {
-          // 合并完成
-          if (i === files.length) {
+
+      const readStream = function (chunkArray) {
+        let path = chunkArray.shift()
+        let originSream = fs.createReadStream(path)
+        originSream.pipe(fileWriteStream, {end: false})
+        originSream.on('end', ()=> {
+          // 删除文件
+          fs.unlinkSync(path)
+          if (chunkArray.length > 0) {
+            readStream(chunkArray)
+          } else {
             fs.rmdir(dirPath, (err) => {
-              console.log(err, 'rmdir')
+              console.log(err, '删除临时文件目录')
             })
-            return res()
+            // 默认情况下不需要手动关闭，但是在某些文件的合并并不会自动关闭可写流，比如压缩文件，所以这里在合并完成之后，统一关闭下
+            resolve(fileWriteStream.close())
           }
-          const chunkpath = dirPath + hash + '-' + i
-          fs.readFile(chunkpath, (err, data) => {
-            if (err) return rej(err)
-
-            // 将切片追加到存储文件
-            fs.appendFile(filePath, data, () => {
-              // 删除切片文件
-              fs.unlink(chunkpath, () => {
-                // 递归合并
-                res(merge(i + 1))
-              })
-            })
-          })
-
         })
       }
-      merge(0).then(() => {
-        // 默认情况下不需要手动关闭，但是在某些文件的合并并不会自动关闭可写流，比如压缩文件，所以这里在合并完成之后，统一关闭下
-        resolve(fileWriteStream.close())
-      })
+      readStream(chunkPathArr)
+      // function merge(i) {
+      //   return new Promise((res, rej) => {
+      //     // 合并完成
+      //     if (i === files.length) {
+      //       fs.rmdir(dirPath, (err) => {
+      //         console.log(err, 'rmdir')
+      //       })
+      //       return res()
+      //     }
+      //     const chunkpath = dirPath + hash + '-' + i
+      //     fs.readFile(chunkpath, (err, data) => {
+      //       if (err) return rej(err)
+
+      //       // 将切片追加到存储文件
+      //       fs.appendFile(filePath, data, () => {
+      //       //   // 删除切片文件
+      //         console.log(chunkpath, data)
+      //         fs.unlink(chunkpath, () => {
+      //           // 递归合并
+      //           res(merge(i + 1))
+      //         })
+      //       })
+      //     })
+
+      //   })
+      // }
+      // merge(0).then(() => {
+      //   // 默认情况下不需要手动关闭，但是在某些文件的合并并不会自动关闭可写流，比如压缩文件，所以这里在合并完成之后，统一关闭下
+      //   resolve(fileWriteStream.close())
+      // })
     })
   })
 }
@@ -217,7 +244,7 @@ router.post('/api/upload/merge', async function uploadFile(ctx) {
     deleteFiles(dirPath)
     ctx.body = {
       code: 0,
-      url: path.join('http://localhost:3000/uploads', name),
+      url: url.resolve('http://localhost:3000', `uploads/${name}`),
       msg: '文件上传成功'
     }
   // 如果没有切片hash文件夹则表明上传失败
@@ -231,7 +258,7 @@ router.post('/api/upload/merge', async function uploadFile(ctx) {
     await mergeFile(dirPath, filePath, hash, total).then(() => {
       ctx.body = {
         code: 0,
-        url: path.join('http://localhost:3000/uploads', name),
+        url: url.resolve('http://localhost:3000', `uploads/${name}`),
         msg: '文件上传成功'
       }
     }).catch(err => {
