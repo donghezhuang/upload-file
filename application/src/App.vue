@@ -1,8 +1,43 @@
 <template>
-  <div>
-     <input type="file" @change="uploadFile">{{ precent }}%
-    <button type="button" v-if="!isStop" @click="stopUpload">暂停</button>
-    <button type="button" v-else @click="reupload">继续上传</button>
+  <div class="container">
+     <input type="file" @change="handleFileChange">{{ precent }}%
+     <el-button type="primary" @click="handlerUpload">
+       上传<i class="el-icon-upload el-icon--right"></i>
+      </el-button>
+    <el-button round @click="reupload" v-if="status == Status.pause">恢复</el-button>
+    <el-button
+      round
+      v-else
+      :disabled="status !== Status.uploading"
+      @click="stopUpload"
+    >暂停</el-button>
+    {{status}}
+   
+   <div class="total-percent">
+      总进度
+      <el-progress :text-inside="true" :stroke-width="20" :percentage="Number(precent)"></el-progress>
+    </div>
+
+    <el-table :data="dataList">
+      <el-table-column
+        prop="chunkName"
+        label="切片hash"
+        align="center"
+      ></el-table-column>
+      <el-table-column label="大小(KB)" align="center" width="120">
+        <template v-slot="{ row }">
+          {{ row.size | transformByte}}
+        </template>
+      </el-table-column>
+      <el-table-column label="进度" align="center">
+        <template v-slot="{ row }">
+          <el-progress
+            :percentage="row.percentage"
+            color="#909399"
+          ></el-progress>
+        </template>
+      </el-table-column>
+    </el-table>
   </div>
 </template>
 
@@ -10,23 +45,46 @@
 import SparkMD5 from 'spark-md5'
 // import Worker from './hash.worker.js'
 
+const Status = {
+  wait: "wait",
+  pause: "pause",
+  uploading: "uploading",
+  error: "error",
+  done: "done"
+}
 export default {
+  filters: {
+    transformByte(val) {
+      return Number((val / 1024).toFixed(0));
+    }
+  },
   data() {
     return {
+      container: {
+        file: null
+      },
+      Status,
+      status: Status.wait, // 等待上传
+      chunks: [], //所有切片
       remainChunks: [], // 剩余切片
-      isStop: false, // 暂停上传控制
       precent: 0, // 上传百分比
       uploadedChunkSize: 0, // 已完成上传的切片数
       fileInfo: null,
-      chunkSize: 100 * 1024 // 切片大小
+      chunkSize: 100 * 1024, // 切片大小
+      dataList: []
     }
   },
   methods: {
     // input改变事件监听
-    uploadFile(e) {
+    handleFileChange(e) {
       const file = e.target.files[0]
-      
+      this.container.file = file
+    },
+    handlerUpload() {
+      let file = this.container.file
       if (!file) return
+
+      this.status = Status.uploading;
       // 如果文件大小大于文件分片大小的5倍才使用分片上传
       if (file.size / this.chunkSize < 5) {
         this.sendFile(file)
@@ -35,13 +93,20 @@ export default {
       this.createFileMd5(file).then(async fileMd5 => {
         // 先查询服务器是否已有上传完的文件切片
         let {data} = await this.getUploadedChunks(fileMd5)
-        console.log(data)
         let uploaded = data.data.length ? data.data.map(v => v.split('-')[1] - 0) : []
         console.log(uploaded)
         // 切割文件
         const chunkArr = await this.cutBlob(fileMd5, file, uploaded)
         this.remainChunks = chunkArr
+
+        console.log(this.chunks)
+
         // 开始上传
+        this.dataList = this.chunks.map(item => ({
+          chunkName: item.name + '-' + item.index,
+          size: item.chunk.size,
+          percentage: 20,
+        }))
         this.sendRequest(chunkArr, 4, this.chunkMerge)
       })
     },
@@ -104,12 +169,17 @@ export default {
             size: file.size,
             name: file.name
           })
+          console.log(2222)
         }
         this.fileInfo = {
           hash: fileHash,
           total: chunkNums,
           name: file.name,
           size: file.size
+        }
+        if (!uploaded.length) {
+          console.log(111)
+          this.chunks = chunkArr
         }
         resolve(chunkArr)
       })
@@ -119,7 +189,7 @@ export default {
       let fetchArr = []
 
       let toFetch = () => {
-        if (this.isStop) {
+        if (this.status == Status.pause) {
           return Promise.reject('暂停上传')
         }
 
@@ -133,7 +203,7 @@ export default {
           // 成功从任务队列中移除
           fetchArr.splice(fetchArr.indexOf(it), 1)
         }, err => {
-          this.isStop = true
+          this.status == Status.error
           // 如果失败则重新放入总队列中
           arr.unshift(chunkItem)
           console.log(err)
@@ -181,11 +251,9 @@ export default {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (e) => {
           const { loaded } = e
-          console.log(e, item.size)
           this.uploadedChunkSize += loaded
           this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
 
-          console.log(this.uploadedChunkSize, item)
           this.precent = ((this.uploadedChunkSize / item.size) * 100).toFixed(2)
         }
       })
@@ -202,6 +270,7 @@ export default {
         headers: { "Content-Type": "multipart/form-data" }
       }).then(({ data }) => {
         console.log(data, 'upload/file')
+        this.status = Status.done
       })
     },
     // 请求合并
@@ -212,16 +281,26 @@ export default {
         data: this.fileInfo,
       }).then(res => {
         console.log(res.data)
+        this.status = Status.done
       })
     },
     stopUpload() {
-      this.isStop = true
+      this.status = Status.pause
     },
     reupload() {
-      this.isStop = false
+      this.status = Status.uploading
       // 开始上传
       this.sendRequest(this.remainChunks, 4, this.chunkMerge)
     }
   }
 }
 </script>
+
+<style>
+  .container {
+    padding: 20px;
+  }
+  .total-percent {
+    margin-top: 20px;
+  }
+</style>
