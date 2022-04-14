@@ -26,7 +26,7 @@ app.use(static('public', {
 
 // 一些自定义的全局请求处理
 app.use(async (ctx, next) => {
-  console.log(`Process ${ctx.request.method} ${ctx.request.url}...`);
+  // console.log(`Process ${ctx.request.method} ${ctx.request.url}...`);
 
   if (ctx.request.method === 'OPTIONS') {
     ctx.status = 200

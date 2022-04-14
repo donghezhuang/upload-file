@@ -1,6 +1,6 @@
 <template>
   <div class="container">
-     <input type="file" @change="handleFileChange">{{ precent }}%
+     <input type="file" @change="handleFileChange">
      <el-button type="primary" @click="handlerUpload">
        上传<i class="el-icon-upload el-icon--right"></i>
       </el-button>
@@ -32,7 +32,7 @@
       <el-table-column label="进度" align="center">
         <template v-slot="{ row }">
           <el-progress
-            :percentage="row.percentage"
+            :percentage="Number(row.percentage)"
             color="#909399"
           ></el-progress>
         </template>
@@ -42,6 +42,7 @@
 </template>
 
 <script>
+import Axios from 'axios'
 import SparkMD5 from 'spark-md5'
 // import Worker from './hash.worker.js'
 
@@ -52,6 +53,12 @@ const Status = {
   error: "error",
   done: "done"
 }
+// CancelToken是一个构造函数，用于创建一个cancelToken实例对象
+// cancelToken实例对象包含了一个promise属性，值为可以触发取消请求的一个promise
+const CancelToken = Axios.CancelToken;
+// 执行source()得到的是一个包含了cancelToken对象和一个取消函数cancel()的对象
+let cancel;
+
 export default {
   filters: {
     transformByte(val) {
@@ -70,8 +77,10 @@ export default {
       precent: 0, // 上传百分比
       uploadedChunkSize: 0, // 已完成上传的切片数
       fileInfo: null,
-      chunkSize: 100 * 1024, // 切片大小
-      dataList: []
+      chunkSize: 1* 1024 * 1024, // 切片大小
+      dataList: [],
+      fetchArr: [],
+      cancelArr: [],
     }
   },
   methods: {
@@ -93,6 +102,16 @@ export default {
       this.createFileMd5(file).then(async fileMd5 => {
         // 先查询服务器是否已有上传完的文件切片
         let {data} = await this.getUploadedChunks(fileMd5)
+        console.log(file)
+        // if (data.data == 'FileAlreadyExists') {
+        //   this.precent = 100
+        //   this.status = Status.done
+        //   this.$message({
+        //     message: '文件上传成功',
+        //     type: 'success'
+        //   });
+        //   return
+        // }
         let uploaded = data.data.length ? data.data.map(v => v.split('-')[1] - 0) : []
         console.log(uploaded)
         // 切割文件
@@ -102,10 +121,11 @@ export default {
         console.log(this.chunks)
 
         // 开始上传
+        console.log('list', this.chunks)
         this.dataList = this.chunks.map(item => ({
           chunkName: item.name + '-' + item.index,
           size: item.chunk.size,
-          percentage: 20,
+          percentage: 0,
         }))
         this.sendRequest(chunkArr, 4, this.chunkMerge)
       })
@@ -169,7 +189,6 @@ export default {
             size: file.size,
             name: file.name
           })
-          console.log(2222)
         }
         this.fileInfo = {
           hash: fileHash,
@@ -179,19 +198,20 @@ export default {
         }
         if (!uploaded.length) {
           console.log(111)
-          this.chunks = chunkArr
+          this.chunks = JSON.parse(JSON.stringify(chunkArr))
+          console.log('cccc', this.chunks)
         }
         resolve(chunkArr)
       })
     },
     // 请求并发处理
     sendRequest(arr, max = 6, callback) {
-      let fetchArr = []
+      this.fetchArr = []
 
       let toFetch = () => {
-        if (this.status == Status.pause) {
-          return Promise.reject('暂停上传')
-        }
+        // if (this.status == Status.pause) {
+        //   return Promise.reject('暂停上传')
+        // }
 
         if (!arr.length) {
           return Promise.resolve()
@@ -201,25 +221,28 @@ export default {
         const it = this.sendChunk(chunkItem)
         it.then(() => {
           // 成功从任务队列中移除
-          fetchArr.splice(fetchArr.indexOf(it), 1)
+          this.fetchArr.splice(this.fetchArr.indexOf(it), 1)
         }, err => {
-          this.status == Status.error
-          // 如果失败则重新放入总队列中
-          arr.unshift(chunkItem)
-          console.log(err)
+          if (Axios.isCancel(err)) {
+            console.log("Rquest canceled", err.message); //请求如果被取消，这里是返回取消的message
+          } else {
+            this.status == Status.error
+            // 如果失败则重新放入总队列中
+            arr.unshift(chunkItem)
+            console.log(err)
+          }
         })
-        fetchArr.push(it)
-        console.log(it)
-
+        this.fetchArr.push(it)
+        console.log(this.fetchArr)
         let p = Promise.resolve()
-        if (fetchArr.length >= max) {
-          p = Promise.race(fetchArr)
+        if (this.fetchArr.length >= max) {
+          p = Promise.race(this.fetchArr)
         }
         return p.then(() => toFetch()) // 执行递归
       }
 
       toFetch().then(() => {
-        Promise.all(fetchArr).then(() => {
+        Promise.all(this.fetchArr).then(() => {
           callback()
         })
 
@@ -242,21 +265,33 @@ export default {
       formdata.append("file", item.chunk)
       formdata.append("index", item.index)
       formdata.append("hash", this.fileInfo.hash)
-      // formdata.append("name", this.fileInfo.name)
 
+      let _this = this
       return this.$http({
+        cancelToken: new CancelToken(function executor(c) {
+          // executor 函数接收一个 cancel 函数作为参数
+          cancel = c;
+          _this.fetchArr.forEach(p => {
+          _this.cancelArr.push({p, cancel})
+          });
+        }),
         url: "/upload/snippet",
         method: "post",
         data: formdata,
         headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: (e) => {
-          const { loaded } = e
-          this.uploadedChunkSize += loaded
-          this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
-
-          this.precent = ((this.uploadedChunkSize / item.size) * 100).toFixed(2)
-        }
+        onUploadProgress: this.createProgressHandler(item)
       })
+    },
+    createProgressHandler(item) {
+      return e => {
+        const { loaded, total } = e
+        this.dataList[item.index].percentage = ((loaded / total) *100).toFixed(2)
+
+        this.uploadedChunkSize += loaded
+        this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
+        console.log(this.dataList[item.index].chunkName, this.dataList[item.index].percentage)
+        this.precent = ((this.uploadedChunkSize / item.size)* 100).toFixed(2) 
+      }
     },
     // 文件上传方法
     sendFile(file) {
@@ -267,9 +302,18 @@ export default {
         url: "/upload/file",
         method: "post",
         data: formdata,
-        headers: { "Content-Type": "multipart/form-data" }
+        headers: { "Content-Type": "multipart/form-data" },
+        onUploadProgress: (e) => {
+          const { loaded, total } = e
+          console.log('上传进度', e)
+          console.log(file)
+          let uploadedFileSize = 0
+          uploadedFileSize += loaded
+          this.precent = ((uploadedFileSize / total) * 100).toFixed(2)
+        }
       }).then(({ data }) => {
         console.log(data, 'upload/file')
+        
         this.status = Status.done
       })
     },
@@ -285,12 +329,18 @@ export default {
       })
     },
     stopUpload() {
+      console.log(this.fetchArr);
+      this.cancelArr.map( c=> {
+        c.cancel()
+      })
       this.status = Status.pause
     },
     reupload() {
       this.status = Status.uploading
       // 开始上传
-      this.sendRequest(this.remainChunks, 4, this.chunkMerge)
+      console.log(this.chunks)
+      // this.handlerUpload()
+      // this.sendRequest(this.remainChunks, 4, this.chunkMerge)
     }
   }
 }
