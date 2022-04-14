@@ -45,11 +45,11 @@ app.use(async (ctx, next) => {
 
 // 加载文件上传中间件
 app.use(koaBody({
-  multipart: true,
+  multipart: true, // 支持文件上传
   formidable: {
     // keepExtensions: true, // 保持文件后缀
     uploadDir: uploadPath, // 初始指定文件存放地址，否则将会放入系统临时文件目录
-    maxFileSize: 10000 * 1024 * 1024    // 设置上传文件大小最大限制，默认20M
+    maxFileSize: 20 * 1024 * 1024    // 设置上传文件大小限制
   }
 }))
 
@@ -67,6 +67,28 @@ function uploadFn(ctx, destPath) {
     })
   })
 }
+
+// 查询文件是否已上传
+router.post('/api/upload/checkFile', function snippet(ctx) {
+  const { name } = ctx.request.body
+  const filePath = path.join(uploadPath, name)
+  console.log('file', filePath)
+  // 已存在文件，则表示已上传成功
+  if (fs.existsSync(filePath)) {
+    ctx.body = {
+      code: 0,
+      data: 'fileExist',
+      msg: '查询成功'
+    }
+  } else {
+    ctx.body = {
+      code: 0,
+      data: 'fileNotExist',
+      msg: '查询成功'
+    }
+  }
+
+})
 
 // 查询分片文件是否上传
 router.post('/api/upload/checkSnippet', function snippet(ctx) {
