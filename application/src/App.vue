@@ -1,7 +1,7 @@
 <template>
   <div class="container">
      <input type="file" @change="handleFileChange">
-     <el-button type="primary" @click="handlerUpload">
+     <el-button type="primary" class="upload-btn" @click="handlerUpload">
        上传<i class="el-icon-upload el-icon--right"></i>
       </el-button>
     <el-button round @click="reupload" v-if="status == Status.pause">恢复</el-button>
@@ -72,8 +72,6 @@ export default {
       },
       Status,
       status: Status.wait, // 等待上传
-      chunks: [], //所有切片
-      remainChunks: [], // 剩余切片
       precent: 0, // 上传百分比
       uploadedChunkSize: 0, // 已完成上传的切片数
       fileInfo: null,
@@ -89,7 +87,7 @@ export default {
       const file = e.target.files[0]
       this.container.file = file
     },
-    handlerUpload() {
+    async handlerUpload() {
       let file = this.container.file
       if (!file) return
 
@@ -97,6 +95,15 @@ export default {
       // 如果文件大小大于文件分片大小的5倍才使用分片上传
       if (file.size / this.chunkSize < 5) {
         this.sendFile(file)
+        return
+      }
+      let { data } = await this.getUploadedFile(file.name) 
+      console.log('dddd', data)
+
+      if (data.data == 'fileExist') {
+        this.isfileExist = true
+        this.precent = 100
+        this.status = Status.done
         return
       }
       this.createFileMd5(file).then(async fileMd5 => {
@@ -113,35 +120,23 @@ export default {
         //   return
         // }
         let uploaded = data.data.length ? data.data.map(v => v.split('-')[1] - 0) : []
-        console.log(uploaded)
+        if (!uploaded.length ) localStorage.setItem(fileMd5, 0)
         // 切割文件
-        const chunkArr = await this.cutBlob(fileMd5, file, uploaded)
-        this.remainChunks = chunkArr
-
-        console.log(this.chunks)
+        const {remainChunks, uploadedChunks} = await this.cutBlob(fileMd5, file, uploaded)
 
         // 开始上传
-        console.log('list', this.chunks)
-        this.dataList = this.chunks.map(item => ({
-          chunkName: item.name + '-' + item.index,
-          size: item.chunk.size,
-          percentage: 0,
-        }))
-        this.sendRequest(chunkArr, 4, this.chunkMerge)
+        const chunks = uploadedChunks.concat(remainChunks)
+        chunks.sort((a, b) => a.index - b.index)
+        this.dataList = chunks.map(item => ({
+            chunkName: item.name + '-' + item.index,
+            size: item.chunk.size,
+            percentage: uploaded.includes(item.index)? 100 : 0,
+          })
+        )
+        this.sendRequest(remainChunks, 4, this.chunkMerge)
       })
     },
-    // createFileMd5(file) {
-    //   return new Promise((resolve) => {
-    //     const worker = new Worker()
-
-    //     worker.postMessage({file, chunkSize: this.chunkSize})
-
-    //     worker.onmessage = event => {
-    //       resolve(event.data)
-    //     }
-    //   })
-    // },
-   
+    
     createFileMd5(file) {
       return new Promise((resolve) => {
         const spark = new SparkMD5.ArrayBuffer()
@@ -163,7 +158,8 @@ export default {
     },
     // 文件分割
     cutBlob(fileHash, file, uploaded) {
-      const chunkArr = [] // 所有切片缓存数组
+      const remainChunks = [] // 待上传切片
+      const uploadedChunks = [] // 已上传切片
       const blobSlice = File.prototype.slice || File.prototype.mozSlice || File.prototype.webkitSlice
       const chunkNums = Math.ceil(file.size / this.chunkSize) // 切片总数
 
@@ -173,22 +169,29 @@ export default {
         let contentItem = ''
 
         for(let i = 0; i < chunkNums; i++) {
-          // 如果已上传则跳过
-          if (uploaded.includes(i)) continue
 
           startIndex = i * this.chunkSize // 片段起点
           endIndex = (i + 1) * this.chunkSize // 片段尾点
           endIndex > file.size && (endIndex = file.size)
-
           // 切割文件
           contentItem = blobSlice.call(file, startIndex, endIndex)
 
-          chunkArr.push({
-            index: i,
-            chunk: contentItem,
-            size: file.size,
-            name: file.name
-          })
+          // 已上传
+          if (uploaded.includes(i)) {
+            uploadedChunks.push({
+              index: i,
+              chunk: contentItem,
+              size: file.size,
+              name: file.name
+            })
+          } else {
+            remainChunks.push({
+              index: i,
+              chunk: contentItem,
+              size: file.size,
+              name: file.name
+            })
+          }
         }
         this.fileInfo = {
           hash: fileHash,
@@ -196,12 +199,7 @@ export default {
           name: file.name,
           size: file.size
         }
-        if (!uploaded.length) {
-          console.log(111)
-          this.chunks = JSON.parse(JSON.stringify(chunkArr))
-          console.log('cccc', this.chunks)
-        }
-        resolve(chunkArr)
+        resolve({remainChunks, uploadedChunks})
       })
     },
     // 请求并发处理
@@ -209,10 +207,7 @@ export default {
       this.fetchArr = []
 
       let toFetch = () => {
-        // if (this.status == Status.pause) {
-        //   return Promise.reject('暂停上传')
-        // }
-
+        
         if (!arr.length) {
           return Promise.resolve()
         }
@@ -250,7 +245,15 @@ export default {
         console.log(err)
       })
     },
-    // 请求已上传文件
+    // 请求已上传的文件
+    getUploadedFile(name) {
+      return this.$http({
+        url: "/upload/checkFile",
+        method: "post",
+        data: { name }
+      })
+    },
+    // 请求已上传文件切片
     getUploadedChunks(hash) {
       return this.$http({
         url: "/upload/checkSnippet",
@@ -279,19 +282,16 @@ export default {
         method: "post",
         data: formdata,
         headers: { "Content-Type": "multipart/form-data" },
-        onUploadProgress: this.createProgressHandler(item)
+        onUploadProgress: e => {
+          const { loaded, total } = e
+          this.dataList[item.index].percentage = ((loaded / total) *100).toFixed(2)
+          this.uploadedChunkSize = Number(localStorage.getItem(this.fileInfo.hash))
+          this.uploadedChunkSize += loaded
+          this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
+          localStorage.setItem(this.fileInfo.hash, this.uploadedChunkSize)
+          this.precent = ((this.uploadedChunkSize / item.size)* 100).toFixed(2) 
+        }
       })
-    },
-    createProgressHandler(item) {
-      return e => {
-        const { loaded, total } = e
-        this.dataList[item.index].percentage = ((loaded / total) *100).toFixed(2)
-
-        this.uploadedChunkSize += loaded
-        this.uploadedChunkSize > item.size && (this.uploadedChunkSize = item.size)
-        console.log(this.dataList[item.index].chunkName, this.dataList[item.index].percentage)
-        this.precent = ((this.uploadedChunkSize / item.size)* 100).toFixed(2) 
-      }
     },
     // 文件上传方法
     sendFile(file) {
@@ -305,8 +305,6 @@ export default {
         headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (e) => {
           const { loaded, total } = e
-          console.log('上传进度', e)
-          console.log(file)
           let uploadedFileSize = 0
           uploadedFileSize += loaded
           this.precent = ((uploadedFileSize / total) * 100).toFixed(2)
@@ -335,12 +333,10 @@ export default {
       })
       this.status = Status.pause
     },
-    reupload() {
+    async reupload() {
       this.status = Status.uploading
       // 开始上传
-      console.log(this.chunks)
-      // this.handlerUpload()
-      // this.sendRequest(this.remainChunks, 4, this.chunkMerge)
+      this.handlerUpload()
     }
   }
 }
@@ -352,5 +348,8 @@ export default {
   }
   .total-percent {
     margin-top: 20px;
+  }
+  .upload-btn {
+    margin-left: 20px !important;
   }
 </style>
