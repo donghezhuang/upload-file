@@ -1,10 +1,10 @@
 const Koa = require('koa')
 const router = require('koa-router')() // koa路由模块
 const koaBody = require('koa-body') //解析文件上传的插件
-const fs = require('fs') // nodeJs内置文件模块
-const url = require('url') // 
-const path = require('path') // nodeJs内置路径模块
 const static = require('koa-static') // 访问服务器静态资源组件
+const fs = require('fs') 
+const url = require('url') 
+const path = require('path') 
 
 const uploadPath = path.join(__dirname, 'public/uploads') // 定义文件上传目录
 
@@ -21,7 +21,7 @@ const app = new Koa() // 实例化
 
 // 定义静态资源访问规则
 app.use(static('public', {
-  maxAge: 30 * 24 * 3600 * 1000 // 静态资源缓存时间 ms
+  maxAge: 1 * 24 * 3600 * 1000 // 静态资源缓存时间 ms
 }))
 
 // 一些自定义的全局请求处理
@@ -58,6 +58,7 @@ function uploadFn(ctx, destPath) {
   return new Promise((resolve, reject) => {
     const { name, path: _path } = ctx.request.files.file // 拿到上传的文件信息
     const filePath = destPath || path.join(uploadPath, name) // 重新组合文件名
+    console.log(_path)
     // 将临时文件重新设置文件名及地址
     fs.rename(_path, filePath, (err) => {
       if (err) {

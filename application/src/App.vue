@@ -11,7 +11,7 @@
       :disabled="status !== Status.uploading"
       @click="stopUpload"
     >暂停</el-button>
-    {{status}}
+    <!-- {{status}} -->
    
    <div class="total-percent">
       总进度
@@ -85,6 +85,7 @@ export default {
     // input改变事件监听
     handleFileChange(e) {
       const file = e.target.files[0]
+      console.log(file);
       this.container.file = file
     },
     async handlerUpload() {
@@ -104,21 +105,20 @@ export default {
         this.isfileExist = true
         this.precent = 100
         this.status = Status.done
+        setTimeout(()=> {
+          this.$message({
+          message: '文件上传成功',
+          type: 'success'
+        });
+        }, 500)
+        
         return
       }
       this.createFileMd5(file).then(async fileMd5 => {
         // 先查询服务器是否已有上传完的文件切片
         let {data} = await this.getUploadedChunks(fileMd5)
         console.log(file)
-        // if (data.data == 'FileAlreadyExists') {
-        //   this.precent = 100
-        //   this.status = Status.done
-        //   this.$message({
-        //     message: '文件上传成功',
-        //     type: 'success'
-        //   });
-        //   return
-        // }
+        
         let uploaded = data.data.length ? data.data.map(v => v.split('-')[1] - 0) : []
         if (!uploaded.length ) localStorage.setItem(fileMd5, 0)
         // 切割文件
@@ -141,10 +141,10 @@ export default {
       return new Promise((resolve) => {
         const spark = new SparkMD5.ArrayBuffer()
         const reader = new FileReader()
-        reader.readAsArrayBuffer(file)
-        reader.addEventListener('loadend', ()=> {
+        reader.readAsArrayBuffer(file) // 读取指定的 Blob 或 File 内容, 将Blob转为ArrayBuffer格式数据
+        reader.addEventListener('loadend', ()=> { 
           const content = reader.result
-
+          console.log(content)
           // 生成文件hash
           spark.append(content)
           const hash = spark.end()
@@ -175,7 +175,7 @@ export default {
           endIndex > file.size && (endIndex = file.size)
           // 切割文件
           contentItem = blobSlice.call(file, startIndex, endIndex)
-
+          console.log(contentItem);
           // 已上传
           if (uploaded.includes(i)) {
             uploadedChunks.push({
@@ -228,7 +228,6 @@ export default {
           }
         })
         this.fetchArr.push(it)
-        console.log(this.fetchArr)
         let p = Promise.resolve()
         if (this.fetchArr.length >= max) {
           p = Promise.race(this.fetchArr)
@@ -311,7 +310,12 @@ export default {
         }
       }).then(({ data }) => {
         console.log(data, 'upload/file')
-        
+        setTimeout(()=> {
+          this.$message({
+          message: '文件上传成功',
+          type: 'success'
+        });
+        }, 500)
         this.status = Status.done
       })
     },
@@ -324,6 +328,12 @@ export default {
       }).then(res => {
         console.log(res.data)
         this.status = Status.done
+        setTimeout(()=> {
+          this.$message({
+            message: '文件上传成功',
+            type: 'success'
+          });
+        }, 500)
       })
     },
     stopUpload() {
